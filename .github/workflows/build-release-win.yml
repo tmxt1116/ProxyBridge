@@ -1,0 +1,63 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - '.github/workflows/build-release-win.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: choco install nsis -y
+        shell: pwsh
+
+      - name: Install NSIS EnVar plugin
+        run: |
+          $nsisPluginDir = "C:\Program Files (x86)\NSIS\Plugins\x86-unicode"
+          $url = "https://nsis.sourceforge.io/mediawiki/images/7/7f/EnVar_plugin.zip"
+          $expectedHash = "E9AA92DE351345ED82795251D838F1AE9041BA35AF9D381A5780C7843B01F56A"
+          Invoke-WebRequest -Uri $url -OutFile "EnVar.zip" -UseBasicParsing
+          $actualHash = (Get-FileHash "EnVar.zip" -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { Write-Error "EnVar.zip SHA256 mismatch!"; exit 1 }
+          Expand-Archive -Path "EnVar.zip" -DestinationPath "EnVar"
+          Copy-Item "EnVar\Plugins\x86-unicode\EnVar.dll" -Destination $nsisPluginDir -Force
+          Write-Host "EnVar plugin installed"
+        shell: pwsh
+
+      - name: Download WinDivert
+        run: |
+          $url = "https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip"
+          $expectedHash = "63CB41763BB4B20F600B6DE04E991A9C2BE73279E317D4D82F237B150C5F3F15"
+          Invoke-WebRequest -Uri $url -OutFile "WinDivert.zip" -UseBasicParsing
+          $actualHash = (Get-FileHash "WinDivert.zip" -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { Write-Error "WinDivert.zip SHA256 mismatch!"; exit 1 }
+          Expand-Archive -Path "WinDivert.zip" -DestinationPath "C:\"
+          Write-Host "WinDivert extracted"
+        shell: pwsh
+
+      - name: Build with compile.ps1
+        run: |
+          cd Windows
+          .\compile.ps1 -NoSign
+        shell: pwsh
+
+      - name: Publish installer to release
+        run: |
+          $exe = Get-ChildItem Windows/output/ProxyBridge-Setup-*.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "Installer not found in Windows/output"; exit 1 }
+          $tag = "win-build-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+          gh release create $tag $exe.FullName --title "Windows build $tag" --notes "Automated unsigned build (compile.ps1 -NoSign) on windows-latest."
+          Write-Host "Released: $tag"
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
